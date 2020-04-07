@@ -1,0 +1,46 @@
+  # Port to expose hub on
+  port: &port 9091
+  # Maximum number of datapoints in the hub at one time. Unlimited if <= 0.
+  limit: -1
+  # Timeout for scrape calls (in seconds).
+  scrapeTimeout: 10
+
+  # Service configuration.
+  service:
+    annotations: {}
+    labels: {}
+    type: ClusterIP
+    ports:
+      - name: prometheus-edge-hub
+        port: *port
+        targetPort: *port
+
+  image:
+    repository:
+    tag:
+    pullPolicy: IfNotPresent
+
+
+  # Number of metrics replicas desired
+  replicas: 1
+
+  # Resource limits & requests
+  resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+  # Define which Nodes the Pods are scheduled on.
+  # ref: https://kubernetes.io/docs/user-guide/node-selection/
+  nodeSelector: {}
+
+  # Tolerations for use with node taints
+  # ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+  tolerations: []
+
+  # Assign prometheus-edge-hub to run on specific nodes
+  # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+  affinity: {}
