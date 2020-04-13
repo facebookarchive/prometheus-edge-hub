@@ -51,7 +51,7 @@ func BenchmarkReceiveMetrics(b *testing.B) {
 			b.Run(fmt.Sprintf("%d-Datapoints-%d-Families", num, buckets), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					hub.metricFamiliesByName = familiesMap[k]
-					hub.Receive(c)
+					_ = hub.Receive(c)
 				}
 			})
 		}
@@ -77,7 +77,7 @@ func BenchmarkScrapeMetrics(b *testing.B) {
 			b.Run(fmt.Sprintf("%d-Datapoints-%d-Families", num, buckets), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					hub.metricFamiliesByName = familiesMap[k]
-					hub.Scrape(c)
+					_ = hub.Scrape(c)
 				}
 			})
 		}

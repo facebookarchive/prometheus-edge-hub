@@ -313,7 +313,7 @@ mf1 456 3
 
 func getGaugeValue(gauge prometheus.Gauge) float64 {
 	var dtoMetric dto.Metric
-	gauge.Write(&dtoMetric)
+	_ = gauge.Write(&dtoMetric)
 	return *dtoMetric.Gauge.Value
 }
 
@@ -323,7 +323,7 @@ func makeFamily(familyType dto.MetricType, familyName string, numMetrics int, la
 		met := prometheus.NewGauge(prometheus.GaugeOpts{Name: familyName, Help: familyName})
 		met.Set(float64(i))
 		var dtoMetric dto.Metric
-		met.Write(&dtoMetric)
+		_ = met.Write(&dtoMetric)
 
 		dtoMetric.Label = append(dtoMetric.Label, labels...)
 		dtoMetric.TimestampMs = &timestamp
