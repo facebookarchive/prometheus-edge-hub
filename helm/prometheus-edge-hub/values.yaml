@@ -1,3 +1,8 @@
+
+  # Reference to one or more secrets to be used when pulling images
+  # ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+  imagePullSecrets: []
+
   # Port to expose hub on
   port: &port 9091
   # Maximum number of datapoints in the hub at one time. Unlimited if <= 0.
@@ -16,8 +21,8 @@
         targetPort: *port
 
   image:
-    repository:
-    tag:
+    repository: prometheus-edge-hub
+    tag: latest
     pullPolicy: IfNotPresent
 
 
