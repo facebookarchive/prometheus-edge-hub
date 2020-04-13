@@ -57,6 +57,7 @@ type hubStats struct {
 	currentCountDatapoints int
 }
 
+// NewMetricHub returns a MetricHub and initializes internal prometheus gauges
 func NewMetricHub(limit int, scrapeTimeout int) *MetricHub {
 	if limit > 0 {
 		glog.Infof("Prometheus-Edge-Hub created with a limit of %d\n", limit)
