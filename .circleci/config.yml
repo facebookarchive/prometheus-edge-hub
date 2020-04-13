@@ -1,6 +1,37 @@
 version: 2.1
 
+aliases:
+  - &mktestdir
+    run:
+      name: Create results directory
+      command: mkdir -p ~/test-results
+
+  - &storetestdir
+    store_test_results:
+      path: ~/test-results
+
+executors:
+  golangci:
+      parameters:
+        tag:
+          default: v1.23.8
+          type: string
+      docker:
+        - image: golangci/golangci-lint:<<parameters.tag>>
+
+orbs:
+  docker: circleci/docker@1.0.0
+  go: circleci/go@1.1.0
+  helm: circleci/helm@0.2.3
+
 commands:
+
+  getmods:
+    steps:
+      - go/load-cache
+      - go/mod-download
+      - go/save-cache
+
   helm-lint:
     parameters:
       chart:
@@ -17,53 +48,54 @@ jobs:
   build:
     docker:
       - image: circleci/golang:1.13
-
-    environment:
-      TEST_RESULTS: /tmp/test-results
-
     steps:
       - checkout
-      - run: mkdir -p $TEST_RESULTS
+      - *mktestdir
       - run:
           name: Run unit tests
-          command: go test ./... > ${TEST_REULTS}/go-test.out
-
+          command: gotestsum -f short-verbose --junitfile ~/test-results/unit.xml
       - setup_remote_docker:
           docker_layer_caching: true
-
       - run: docker build -t prometheus-edge-hub .
-
-      - run: docker run prometheus-edge-hub -p 9091:9091
-
       - run:
-          name: Validate services are working
+          name: "Start Service and Check That it’s Running"
           command: |
-            sleep 5
-            curl --retry 10 --retry-delay 1 http://localhost:9091/
-
+            docker run -d -p 9091:9091 --name prometheus-edge-hub prometheus-edge-hub
+            docker exec prometheus-edge-hub apk add curl
+            docker exec prometheus-edge-hub curl --retry 10 --retry-connrefused http://localhost:9091
       - store_artifacts:
           path: /tmp/test-results
           destination: raw-test-output
+      - *storetestdir
 
-      - store_test_results:
-          path: /tmp/test-results
+  lint:
+    executor: golangci
+    steps:
+      - checkout
+      - *mktestdir
+      - getmods
+      - run:
+          name: Lint tests
+          command: golangci-lint run --out-format junit-xml > ~/test-results/lint.xml
+      - *storetestdir
 
   helm-lint:
     executor: docker/docker
-      parameters:
-        working_directory:
-          default: helm
-          type: string
-      steps:
-        - checkout
-        - helm/install-helm-client
-        - helm-lint:
-            chart: prometheus-edge-hub
-            working_directory: <<parameters.working_directory>>
+    parameters:
+      working_directory:
+        default: helm
+        type: string
+    steps:
+      - checkout
+      - helm/install-helm-client
+      - helm-lint:
+          chart: prometheus-edge-hub
+          working_directory: <<parameters.working_directory>>
 
 workflows:
   version: 2.1
   all:
     jobs:
+      - lint
       - helm-lint
       - build
