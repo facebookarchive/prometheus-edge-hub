@@ -1,0 +1,74 @@
+version: 2.1
+
+commands:
+  helm-lint:
+    parameters:
+      chart:
+        type: string
+      working_directory:
+        type: string
+    steps:
+      - run:
+          name: Lint <<parameters.chart>> chart
+          working_directory: <<parameters.working_directory>>
+          command: helm lint --strict <<parameters.chart>>
+
+jobs:
+  build:
+    docker:
+      - image: circleci/golang:1.13
+
+    environment:
+      TEST_RESULTS: /tmp/test-results
+
+    steps:
+      - checkout
+      - run: mkdir -p $TEST_RESULTS
+      - run:
+          name: Run unit tests
+          command: go test ./... > ${TEST_REULTS}/go-test.out
+
+      - setup_remote_docker:
+          docker_layer_caching: true
+
+      - run: docker build -t prometheus-edge-hub .
+
+      - run: docker run prometheus-edge-hub -p 9091:9091
+
+      - run:
+          name: Validate services are working
+          command: |
+            sleep 5
+            curl --retry 10 --retry-delay 1 http://localhost:9091/
+
+      - store_artifacts:
+          path: /tmp/test-results
+          destination: raw-test-output
+
+      - store_test_results:
+          path: /tmp/test-results
+
+  lint:
+    - checkout
+    - run: golint ./...
+
+  helm-lint:
+    executor: docker/docker
+      parameters:
+        working_directory:
+          default: helm
+          type: string
+      steps:
+        - checkout
+        - helm/install-helm-client
+        - helm-lint:
+            chart: prometheus-edge-hub
+            working_directory: <<parameters.working_directory>>
+
+workflows:
+  version: 2.1
+  all:
+    jobs:
+      - lint
+      - helm-lint
+      - build
