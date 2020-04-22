@@ -1,0 +1,14 @@
+# Copyright (c) 2004-present Facebook All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+name: prometheus-edge-hub
+apiVersion: v1
+version: 0.1.0
+description: Prometheus edge hub for receiving and temporarily storing metrics to be scraped.
+keywords:
+  - prometheus
+maintainers:
+  - name: Scott Smith
+    email: smithscott@fb.com
+engine: gotpl
