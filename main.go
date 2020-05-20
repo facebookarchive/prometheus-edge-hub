@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"prometheus-edge-hub/hub"
+	"github.com/facebookincubator/prometheus-edge-hub/hub"
 
 	"github.com/labstack/echo"
 )

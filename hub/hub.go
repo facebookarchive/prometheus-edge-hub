@@ -80,8 +80,10 @@ func NewMetricHub(limit int, scrapeTimeout int) *MetricHub {
 
 // Receive is a handler function to receive metric pushes
 func (c *MetricHub) Receive(ctx echo.Context) error {
-	var parser expfmt.TextParser
-	var err error
+	var (
+		err    error
+		parser expfmt.TextParser
+	)
 
 	parsedFamilies, err := parser.TextToMetricFamilies(ctx.Request().Body)
 	if err != nil {
@@ -152,7 +154,7 @@ func (c *MetricHub) clearMetrics() {
 func (c *MetricHub) exposeMetrics(metricFamiliesByName map[string]*familyAndMetrics, workers int) string {
 	fams := make(chan *familyAndMetrics, workers)
 	results := make(chan string, workers)
-	respStrChannel := make(chan string, 1)
+	respCh := make(chan string, 1)
 
 	waitGroup := &sync.WaitGroup{}
 
@@ -161,7 +163,7 @@ func (c *MetricHub) exposeMetrics(metricFamiliesByName map[string]*familyAndMetr
 		go processFamilyWorker(fams, results, waitGroup)
 	}
 
-	go processFamilyStringsWorker(results, respStrChannel)
+	go processFamilyStringsWorker(results, respCh)
 
 	for _, fam := range metricFamiliesByName {
 		fams <- fam
@@ -172,8 +174,8 @@ func (c *MetricHub) exposeMetrics(metricFamiliesByName map[string]*familyAndMetr
 	close(results)
 
 	select {
-	case respStr := <-respStrChannel:
-		return respStr
+	case resp := <-respCh:
+		return resp
 	case <-time.After(time.Duration(c.scrapeTimeout) * time.Second):
 		glog.Errorf("Timeout reached for building metrics string. Returning empty string.")
 		return ""
@@ -193,13 +195,12 @@ func processFamilyWorker(fams <-chan *familyAndMetrics, results chan<- string, w
 	}
 }
 
-func processFamilyStringsWorker(results <-chan string, respStrChannel chan<- string) {
-	respStr := strings.Builder{}
-
+func processFamilyStringsWorker(results <-chan string, respCh chan<- string) {
+	var resp strings.Builder
 	for result := range results {
-		respStr.WriteString(result)
+		resp.WriteString(result)
 	}
-	respStrChannel <- respStr.String()
+	respCh <- resp.String()
 }
 
 func (c *MetricHub) exposeInternalMetrics() string {
@@ -277,21 +278,21 @@ type familyAndMetrics struct {
 }
 
 func newFamilyAndMetrics(family *dto.MetricFamily) *familyAndMetrics {
-	metricMap := make(map[string][]*dto.Metric)
+	metrics := make(map[string][]*dto.Metric)
 	for _, metric := range family.Metric {
 		name := makeLabeledName(metric, family.GetName())
-		if metricQueue, ok := metricMap[name]; ok {
-			metricMap[name] = append(metricQueue, metric)
+		if metricQueue, ok := metrics[name]; ok {
+			metrics[name] = append(metricQueue, metric)
 		} else {
-			metricMap[name] = []*dto.Metric{metric}
+			metrics[name] = []*dto.Metric{metric}
 		}
 	}
 	// clear metrics in family because we are keeping them in the queues
-	family.Metric = []*dto.Metric{}
+	family.Metric = nil
 
 	return &familyAndMetrics{
 		family:  family,
-		metrics: metricMap,
+		metrics: metrics,
 	}
 }
 
@@ -354,8 +355,7 @@ func familyToString(family *dto.MetricFamily) (string, error) {
 
 func writeInternalMetric(metric prometheus.Metric, name string, familyType dto.MetricType) (string, error) {
 	var dtoMetric dto.Metric
-	err := metric.Write(&dtoMetric)
-	if err != nil {
+	if err := metric.Write(&dtoMetric); err != nil {
 		return "", err
 	}
 	fam := dto.MetricFamily{
@@ -363,9 +363,5 @@ func writeInternalMetric(metric prometheus.Metric, name string, familyType dto.M
 		Type:   &familyType,
 		Metric: []*dto.Metric{&dtoMetric},
 	}
-	hubSizeStr, err := familyToString(&fam)
-	if err != nil {
-		return "", err
-	}
-	return hubSizeStr, nil
+	return familyToString(&fam)
 }
