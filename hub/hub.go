@@ -31,12 +31,20 @@ const (
 	scrapeWorkerPoolSize   = 100
 )
 
+var (
+	hubLimit = prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubLimit, Help: "Maximum number of datapoints in hub"})
+	hubSize  = prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubSize, Help: "Number of datapoints in hub"})
+)
+
+func init() {
+	prometheus.MustRegister(hubLimit, hubSize)
+}
+
 // MetricHub serves as a replacement for the prometheus pushgateway. Accepts
 // timestamps with metrics, and stores them in a queue to allow multiple
 // datapoints per metric series to be scraped
 type MetricHub struct {
 	metricFamiliesByName map[string]*familyAndMetrics
-	internalMetrics      map[string]prometheus.Gauge
 	limit                int
 	stats                hubStats
 	sync.Mutex
@@ -64,15 +72,10 @@ func NewMetricHub(limit int, scrapeTimeout int) *MetricHub {
 		glog.Info("Prometheus-Edge-Hub created with no limit\n")
 	}
 
-	hubLimit := prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubLimit, Help: "Maximum number of datapoints in hub", ConstLabels: prometheus.Labels{"networkID": "internal"}})
-	hubSize := prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubSize, Help: "Number of datapoints in hub", ConstLabels: prometheus.Labels{"networkID": "internal"}})
-	internalMetrics := map[string]prometheus.Gauge{internalMetricHubLimit: hubLimit, internalMetricHubSize: hubSize}
-
 	hubLimit.Set(float64(limit))
 
 	return &MetricHub{
 		metricFamiliesByName: make(map[string]*familyAndMetrics),
-		internalMetrics:      internalMetrics,
 		limit:                limit,
 		scrapeTimeout:        scrapeTimeout,
 	}
@@ -110,7 +113,7 @@ func (c *MetricHub) Receive(ctx echo.Context) error {
 	c.stats.lastReceiveSize = ctx.Request().ContentLength
 	c.stats.lastReceiveNumFamilies = len(parsedFamilies)
 	c.stats.currentCountDatapoints += newDatapoints
-	c.internalMetrics[internalMetricHubSize].Set(float64(c.stats.currentCountDatapoints))
+	hubSize.Set(float64(c.stats.currentCountDatapoints))
 
 	return ctx.NoContent(http.StatusOK)
 }
@@ -136,13 +139,12 @@ func (c *MetricHub) Scrape(ctx echo.Context) error {
 	c.Unlock()
 
 	expositionString := c.exposeMetrics(scrapeMetrics, scrapeWorkerPoolSize)
-	expositionString += c.exposeInternalMetrics()
 
 	c.stats.lastScrapeTime = time.Now().Unix()
 	c.stats.lastScrapeSize = int64(len(expositionString))
 	c.stats.lastScrapeNumFamilies = len(scrapeMetrics)
 	c.stats.currentCountDatapoints = 0
-	c.internalMetrics[internalMetricHubSize].Set(0)
+	hubSize.Set(0)
 
 	return ctx.String(http.StatusOK, expositionString)
 }
@@ -203,18 +205,6 @@ func processFamilyStringsWorker(results <-chan string, respCh chan<- string) {
 	respCh <- resp.String()
 }
 
-func (c *MetricHub) exposeInternalMetrics() string {
-	strBuilder := strings.Builder{}
-	for name, metric := range c.internalMetrics {
-		str, err := writeInternalMetric(metric, name, dto.MetricType_GAUGE)
-		if err != nil {
-			continue
-		}
-		strBuilder.WriteString(str)
-	}
-	return strBuilder.String()
-}
-
 // Debug is a handler function to show the current state of the hub without
 // consuming any datapoints
 func (c *MetricHub) Debug(ctx echo.Context) error {
@@ -251,7 +241,7 @@ Current Count Datapoints: %d `, hostname, limitValue, utilizationValue,
 		c.stats.currentCountFamilies, c.stats.currentCountSeries, c.stats.currentCountDatapoints)
 
 	if verbose != "" {
-		debugString += fmt.Sprintf("\n\nCurrent Exposition Text:\n%s\n%s", c.exposeMetrics(c.metricFamiliesByName, scrapeWorkerPoolSize), c.exposeInternalMetrics())
+		debugString += fmt.Sprintf("\n\nCurrent Exposition Text:\n%s\n", c.exposeMetrics(c.metricFamiliesByName, scrapeWorkerPoolSize))
 	}
 
 	return ctx.String(http.StatusOK, debugString)
@@ -353,15 +343,19 @@ func familyToString(family *dto.MetricFamily) (string, error) {
 	return buf.String(), nil
 }
 
-func writeInternalMetric(metric prometheus.Metric, name string, familyType dto.MetricType) (string, error) {
-	var dtoMetric dto.Metric
-	if err := metric.Write(&dtoMetric); err != nil {
+func WriteInternalMetrics() (string, error) {
+	metrics, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
 		return "", err
 	}
-	fam := dto.MetricFamily{
-		Name:   &name,
-		Type:   &familyType,
-		Metric: []*dto.Metric{&dtoMetric},
+	str := strings.Builder{}
+	for _, fam := range metrics {
+		buf := bytes.Buffer{}
+		_, err := expfmt.MetricFamilyToText(&buf, fam)
+		if err != nil {
+			return "", err
+		}
+		str.WriteString(buf.String())
 	}
-	return familyToString(&fam)
+	return str.String(), nil
 }

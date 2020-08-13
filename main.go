@@ -40,5 +40,15 @@ func main() {
 	// For liveness probe
 	e.GET("/", func(ctx echo.Context) error { return ctx.NoContent(http.StatusOK) })
 
-	e.Logger.Fatal(e.Start(fmt.Sprintf(":%s", *port)))
+	e.GET("/internal", serveInternalMetrics)
+
+	go e.Logger.Fatal(e.Start(fmt.Sprintf(":%s", *port)))
+}
+
+func serveInternalMetrics(ctx echo.Context) error {
+	text, err := hub.WriteInternalMetrics()
+	if err != nil {
+		return ctx.NoContent(http.StatusInternalServerError)
+	}
+	return ctx.String(http.StatusOK, text)
 }

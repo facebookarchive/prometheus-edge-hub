@@ -60,8 +60,8 @@ func TestReceiveMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Check Internal Metrics
-	assert.Equal(t, 14, int(getGaugeValue(hub.internalMetrics[internalMetricHubSize])))
-	assert.Equal(t, 0, int(getGaugeValue(hub.internalMetrics[internalMetricHubLimit])))
+	assertPrometheusValue(t, internalMetricHubSize, 14)
+	assertPrometheusValue(t, internalMetricHubLimit, 0)
 }
 
 func TestReceiveOverLimit(t *testing.T) {
@@ -69,9 +69,6 @@ func TestReceiveOverLimit(t *testing.T) {
 	resp, err := receiveString(hub, sampleReceiveString)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusNotAcceptable, resp.Code)
-
-	assert.Equal(t, 0, int(getGaugeValue(hub.internalMetrics[internalMetricHubSize])))
-	assert.Equal(t, 1, int(getGaugeValue(hub.internalMetrics[internalMetricHubLimit])))
 }
 
 func TestReceiveBadMetrics(t *testing.T) {
@@ -106,15 +103,14 @@ func TestScrape(t *testing.T) {
 	var parser expfmt.TextParser
 	parsedFamilies, err := parser.TextToMetricFamilies(rec.Body)
 	assert.NoError(t, err)
-	assert.Equal(t, 5, len(parsedFamilies))
+	assert.Equal(t, 3, len(parsedFamilies))
 
 	// make sure all metrics are returned.
-	// there are 2 extra internal metrics
 	sum := 0
 	for _, family := range parsedFamilies {
 		sum += len(family.Metric)
 	}
-	assert.Equal(t, 16, sum)
+	assert.Equal(t, 14, sum)
 }
 
 func TestScrapeBadMetrics(t *testing.T) {
@@ -335,5 +331,15 @@ func makeFamily(familyType dto.MetricType, familyName string, numMetrics int, la
 		Help:   &familyName,
 		Type:   &familyType,
 		Metric: metrics,
+	}
+}
+
+func assertPrometheusValue(t *testing.T, name string, expectedValue float64) {
+	metrics, err := prometheus.DefaultGatherer.Gather()
+	assert.NoError(t, err)
+	for _, met := range metrics {
+		if met.GetName() == name {
+			assert.Equal(t, expectedValue, met.GetMetric()[0].Gauge.GetValue())
+		}
 	}
 }
