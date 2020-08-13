@@ -10,6 +10,7 @@ package hub
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -179,7 +180,7 @@ func (c *MetricHub) exposeMetrics(metricFamiliesByName map[string]*familyAndMetr
 	case resp := <-respCh:
 		return resp
 	case <-time.After(time.Duration(c.scrapeTimeout) * time.Second):
-		glog.Errorf("Timeout reached for building metrics string. Returning empty string.")
+		log.Print("Timeout reached for building metrics string")
 		return ""
 	}
 }
@@ -187,10 +188,10 @@ func (c *MetricHub) exposeMetrics(metricFamiliesByName map[string]*familyAndMetr
 func processFamilyWorker(fams <-chan *familyAndMetrics, results chan<- string, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 	for fam := range fams {
-		pullFamily := fam.popSortedDatapoints()
+		pullFamily := fam.popDatapoints()
 		familyStr, err := familyToString(pullFamily)
 		if err != nil {
-			glog.Errorf("metric %s dropped. error converting metric to string: %v", *pullFamily.Name, err)
+			log.Printf("metric %s dropped. error converting metric to string: %v", *pullFamily.Name, err)
 		} else {
 			results <- familyStr
 		}
@@ -272,7 +273,11 @@ func newFamilyAndMetrics(family *dto.MetricFamily) *familyAndMetrics {
 	for _, metric := range family.Metric {
 		name := makeLabeledName(metric, family.GetName())
 		if metricQueue, ok := metrics[name]; ok {
-			metrics[name] = append(metricQueue, metric)
+			if *metric.TimestampMs >= *metricQueue[len(metricQueue)-1].TimestampMs {
+				metrics[name] = append(metricQueue, metric)
+			} else {
+				metrics[name] = sortedInsert(metricQueue, metric)
+			}
 		} else {
 			metrics[name] = []*dto.Metric{metric}
 		}
@@ -287,10 +292,15 @@ func newFamilyAndMetrics(family *dto.MetricFamily) *familyAndMetrics {
 }
 
 func (f *familyAndMetrics) addMetrics(newMetrics []*dto.Metric) {
+	// Keep array sorted [t0, t1, t2...] each insert
 	for _, metric := range newMetrics {
 		metricName := makeLabeledName(metric, f.family.GetName())
 		if queue, ok := f.metrics[metricName]; ok {
-			f.metrics[metricName] = append(queue, metric)
+			if *metric.TimestampMs >= *queue[len(queue)-1].TimestampMs {
+				f.metrics[metricName] = append(queue, metric)
+			} else {
+				queue = sortedInsert(queue, metric)
+			}
 		} else {
 			f.metrics[metricName] = []*dto.Metric{metric}
 		}
@@ -299,16 +309,12 @@ func (f *familyAndMetrics) addMetrics(newMetrics []*dto.Metric) {
 
 // Returns a prometheus MetricFamily populated with all datapoints, sorted so
 // that the earliest datapoint appears first
-func (f *familyAndMetrics) popSortedDatapoints() *dto.MetricFamily {
+func (f *familyAndMetrics) popDatapoints() *dto.MetricFamily {
 	pullFamily := f.copyFamily()
 	for _, queue := range f.metrics {
 		if len(queue) == 0 {
 			continue
 		}
-		// Sort metrics by timestamp
-		sort.Slice(queue, func(i, j int) bool {
-			return *queue[i].TimestampMs < *queue[j].TimestampMs
-		})
 		pullFamily.Metric = append(pullFamily.Metric, queue...)
 	}
 	return &pullFamily
@@ -358,4 +364,12 @@ func WriteInternalMetrics() (string, error) {
 		str.WriteString(buf.String())
 	}
 	return str.String(), nil
+}
+
+func sortedInsert(data []*dto.Metric, el *dto.Metric) []*dto.Metric {
+	index := sort.Search(len(data), func(i int) bool { return *data[i].TimestampMs > *el.TimestampMs })
+	data = append(data, &dto.Metric{})
+	copy(data[index+1:], data[index:])
+	data[index] = el
+	return data
 }
