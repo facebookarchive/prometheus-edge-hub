@@ -77,6 +77,25 @@ func TestReceiveBadMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
+func TestReceiveGRPC(t *testing.T) {
+	hub := NewMetricHub(0, 10)
+	f1 := makeFamily(dto.MetricType_GAUGE, "fam1", 10, []*dto.LabelPair{}, 1)
+	f2 := makeFamily(dto.MetricType_GAUGE, "fam2", 10, []*dto.LabelPair{}, 1)
+	hub.ReceiveGRPC([]*dto.MetricFamily{f1, f2})
+
+	assert.Equal(t, 2, hub.stats.lastGRPCReceiveNumFamilies)
+	assert.Equal(t, 20, hub.stats.currentCountDatapoints)
+}
+
+func TestReceiveGRPCOverLimit(t *testing.T) {
+	hub := NewMetricHub(1, 10)
+	f1 := makeFamily(dto.MetricType_GAUGE, "fam1", 10, []*dto.LabelPair{}, 1)
+	hub.ReceiveGRPC([]*dto.MetricFamily{f1})
+
+	assert.Equal(t, 0, hub.stats.lastGRPCReceiveNumFamilies)
+	assert.Equal(t, 0, hub.stats.currentCountDatapoints)
+}
+
 func receiveString(hub *MetricHub, receiveString string) (*httptest.ResponseRecorder, error) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(receiveString))
 	rec := httptest.NewRecorder()

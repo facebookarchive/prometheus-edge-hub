@@ -9,7 +9,13 @@ package hub
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"github.com/golang/glog"
+	"github.com/labstack/echo"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,12 +24,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/golang/glog"
-	"github.com/labstack/echo"
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
 )
 
 const (
@@ -37,10 +37,16 @@ var (
 	httpReceiveSizeDP  = prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_receive_size_dp", Help: "Size of last HTTP receive (number of datapoints)"})
 	httpReceiveTime    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_receive_time", Help: "Time to ingest last HTTP receive"})
 	parseTime          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "parse_time", Help: "Time to parse last HTTP receive"})
+	grpcReceiveSizeFam = prometheus.NewGauge(prometheus.GaugeOpts{Name: "grpc_receive_size_fam", Help: "Size of last GRPC receive (number of families)"})
+	grpcReceiveSizeDP  = prometheus.NewGauge(prometheus.GaugeOpts{Name: "grpc_receive_size_dp", Help: "Size of last GRPC receive (number of datapoints)"})
+	grpcReceiveTime    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "grpc_receive_time", Help: "Time to ingest last GRPC receive"})
+
+	scrapeLockWait = prometheus.NewGauge(prometheus.GaugeOpts{Name: "scrape_lock_wait", Help: "Time spent waiting on lock by last scrape request"})
 )
 
 func init() {
-	prometheus.MustRegister(hubLimit, hubSize, httpReceiveSizeFam, httpReceiveSizeDP, httpReceiveTime, parseTime)
+	prometheus.MustRegister(hubLimit, hubSize, httpReceiveSizeFam, httpReceiveSizeDP, httpReceiveTime, parseTime,
+		grpcReceiveTime, grpcReceiveSizeDP, grpcReceiveSizeFam, scrapeLockWait)
 }
 
 // MetricHub serves as a replacement for the prometheus pushgateway. Accepts
@@ -65,6 +71,10 @@ type hubStats struct {
 	lastHTTPReceiveTime        int64
 	lastHTTPReceiveSize        int64
 	lastHTTPReceiveNumFamilies int
+
+	lastGRPCReceiveTime        int64
+	lastGRPCReceiveSize        int
+	lastGRPCReceiveNumFamilies int
 
 	currentCountFamilies   int
 	currentCountSeries     int
@@ -140,6 +150,47 @@ func (c *MetricHub) hubMetrics(families map[string]*dto.MetricFamily) {
 			c.metricFamiliesByName[fam.GetName()] = newFamilyAndMetrics(fam)
 		}
 	}
+}
+
+func (c *MetricHub) ReceiveGRPC(families []*dto.MetricFamily) {
+	t0 := time.Now()
+
+	c.Lock()
+	defer c.Unlock()
+
+	newDatapoints := 0
+	for _, fam := range families {
+		newDatapoints += len(fam.Metric)
+	}
+
+	// Check if new datapoints will exceed the specified limit
+	if c.limit > 0 {
+		if c.stats.currentCountDatapoints+newDatapoints > c.limit {
+			errString := fmt.Sprintf("Not accepting push of size %d. Would overfill hub limit of %d. Current hub size: %d\n", newDatapoints, c.limit, c.stats.currentCountDatapoints)
+			glog.Error(errString)
+			return
+		}
+	}
+
+	for _, fam := range families {
+		if families, ok := c.metricFamiliesByName[fam.GetName()]; ok {
+			families.addMetrics(fam.Metric)
+		} else {
+			c.metricFamiliesByName[fam.GetName()] = newFamilyAndMetrics(fam)
+		}
+	}
+
+	grpcReceiveTime.Set(time.Since(t0).Seconds())
+	log.Printf("GRPC Time: %v\n", time.Since(t0))
+	log.Printf("GRPC Time(seconds): %f\n", time.Since(t0).Seconds())
+	grpcReceiveSizeFam.Set(float64(len(families)))
+	grpcReceiveSizeDP.Set(float64(newDatapoints))
+
+	c.stats.lastGRPCReceiveTime = time.Now().Unix()
+	c.stats.lastGRPCReceiveNumFamilies = len(families)
+	c.stats.lastGRPCReceiveSize = binary.Size(families)
+	c.stats.currentCountDatapoints += newDatapoints
+
 }
 
 // Scrape is a handler function for prometheus scrape requests. Formats the
@@ -245,11 +296,16 @@ Last HTTP Receive: %d
 	Receive Size: %d
 	Number of Families: %d
 
+Last GRPC Receive: %d
+    Receive Size: %d
+	Number of families: %d
+
 Current Count Families:   %d
 Current Count Series:     %d
 Current Count Datapoints: %d `, hostname, limitValue, utilizationValue,
 		c.stats.lastScrapeTime, c.stats.lastScrapeSize, c.stats.lastScrapeNumFamilies,
 		c.stats.lastHTTPReceiveTime, c.stats.lastHTTPReceiveSize, c.stats.lastHTTPReceiveNumFamilies,
+		c.stats.lastGRPCReceiveTime, c.stats.lastGRPCReceiveSize, c.stats.lastGRPCReceiveNumFamilies,
 		c.stats.currentCountFamilies, c.stats.currentCountSeries, c.stats.currentCountDatapoints)
 
 	if verbose != "" {
