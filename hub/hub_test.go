@@ -60,8 +60,8 @@ func TestReceiveMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Check Internal Metrics
-	assertPrometheusValue(t, internalMetricHubSize, 14)
-	assertPrometheusValue(t, internalMetricHubLimit, 0)
+	assertPrometheusValue(t, "hub_size", 14)
+	assertPrometheusValue(t, "hub_limit", 0)
 }
 
 func TestReceiveOverLimit(t *testing.T) {
@@ -134,7 +134,7 @@ func TestDebugEndpoint(t *testing.T) {
 	assert.Equal(t, 5, hub.stats.currentCountSeries)
 	assert.Equal(t, 3, hub.stats.currentCountFamilies)
 	assert.Equal(t, 14, hub.stats.currentCountDatapoints)
-	assert.Equal(t, 3, hub.stats.lastReceiveNumFamilies)
+	assert.Equal(t, 3, hub.stats.lastHTTPReceiveNumFamilies)
 }
 
 func TestHubMetrics(t *testing.T) {

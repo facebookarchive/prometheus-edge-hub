@@ -27,18 +27,20 @@ import (
 )
 
 const (
-	internalMetricHubSize  = "hub_size"
-	internalMetricHubLimit = "hub_limit"
-	scrapeWorkerPoolSize   = 100
+	scrapeWorkerPoolSize = 100
 )
 
 var (
-	hubLimit = prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubLimit, Help: "Maximum number of datapoints in hub"})
-	hubSize  = prometheus.NewGauge(prometheus.GaugeOpts{Name: internalMetricHubSize, Help: "Number of datapoints in hub"})
+	hubLimit           = prometheus.NewGauge(prometheus.GaugeOpts{Name: "hub_limit", Help: "Maximum number of datapoints in hub"})
+	hubSize            = prometheus.NewGauge(prometheus.GaugeOpts{Name: "hub_size", Help: "Number of datapoints in hub"})
+	httpReceiveSizeFam = prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_receive_size_fam", Help: "Size of last HTTP receive (number of families)"})
+	httpReceiveSizeDP  = prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_receive_size_dp", Help: "Size of last HTTP receive (number of datapoints)"})
+	httpReceiveTime    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_receive_time", Help: "Time to ingest last HTTP receive"})
+	parseTime          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "parse_time", Help: "Time to parse last HTTP receive"})
 )
 
 func init() {
-	prometheus.MustRegister(hubLimit, hubSize)
+	prometheus.MustRegister(hubLimit, hubSize, httpReceiveSizeFam, httpReceiveSizeDP, httpReceiveTime, parseTime)
 }
 
 // MetricHub serves as a replacement for the prometheus pushgateway. Accepts
@@ -52,14 +54,17 @@ type MetricHub struct {
 	scrapeTimeout int
 }
 
+// hubStats are for metrics that aren't worth exposing to prometheus, and also
+// to provide a simpler way of exposing them in the `Debug` method since extracting
+// values from the prometheus registry is not simple
 type hubStats struct {
 	lastScrapeTime        int64
 	lastScrapeSize        int64
 	lastScrapeNumFamilies int
 
-	lastReceiveTime        int64
-	lastReceiveSize        int64
-	lastReceiveNumFamilies int
+	lastHTTPReceiveTime        int64
+	lastHTTPReceiveSize        int64
+	lastHTTPReceiveNumFamilies int
 
 	currentCountFamilies   int
 	currentCountSeries     int
@@ -84,6 +89,7 @@ func NewMetricHub(limit int, scrapeTimeout int) *MetricHub {
 
 // Receive is a handler function to receive metric pushes
 func (c *MetricHub) Receive(ctx echo.Context) error {
+	t0 := time.Now()
 	var (
 		err    error
 		parser expfmt.TextParser
@@ -93,6 +99,7 @@ func (c *MetricHub) Receive(ctx echo.Context) error {
 	if err != nil {
 		return ctx.String(http.StatusBadRequest, fmt.Sprintf("error parsing metrics: %v", err))
 	}
+	parseTime.Set(time.Since(t0).Seconds())
 
 	newDatapoints := 0
 	for _, fam := range parsedFamilies {
@@ -107,12 +114,16 @@ func (c *MetricHub) Receive(ctx echo.Context) error {
 			return ctx.String(http.StatusNotAcceptable, errString)
 		}
 	}
+	httpReceiveSizeDP.Set(float64(newDatapoints))
+	httpReceiveSizeFam.Set(float64(len(parsedFamilies)))
 
+	t2 := time.Now()
 	c.hubMetrics(parsedFamilies)
+	httpReceiveTime.Set(time.Since(t2).Seconds())
 
-	c.stats.lastReceiveTime = time.Now().Unix()
-	c.stats.lastReceiveSize = ctx.Request().ContentLength
-	c.stats.lastReceiveNumFamilies = len(parsedFamilies)
+	c.stats.lastHTTPReceiveTime = time.Now().Unix()
+	c.stats.lastHTTPReceiveSize = ctx.Request().ContentLength
+	c.stats.lastHTTPReceiveNumFamilies = len(parsedFamilies)
 	c.stats.currentCountDatapoints += newDatapoints
 	hubSize.Set(float64(c.stats.currentCountDatapoints))
 
@@ -230,7 +241,7 @@ Last Scrape: %d
 	Scrape Size: %d
 	Number of Familes: %d
 
-Last Receive: %d
+Last HTTP Receive: %d
 	Receive Size: %d
 	Number of Families: %d
 
@@ -238,7 +249,7 @@ Current Count Families:   %d
 Current Count Series:     %d
 Current Count Datapoints: %d `, hostname, limitValue, utilizationValue,
 		c.stats.lastScrapeTime, c.stats.lastScrapeSize, c.stats.lastScrapeNumFamilies,
-		c.stats.lastReceiveTime, c.stats.lastReceiveSize, c.stats.lastReceiveNumFamilies,
+		c.stats.lastHTTPReceiveTime, c.stats.lastHTTPReceiveSize, c.stats.lastHTTPReceiveNumFamilies,
 		c.stats.currentCountFamilies, c.stats.currentCountSeries, c.stats.currentCountDatapoints)
 
 	if verbose != "" {
