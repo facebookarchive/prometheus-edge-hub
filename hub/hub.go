@@ -366,7 +366,7 @@ func (f *familyAndMetrics) addMetrics(newMetrics []*dto.Metric) {
 			if *metric.TimestampMs >= *queue[len(queue)-1].TimestampMs {
 				f.metrics[metricName] = append(queue, metric)
 			} else {
-				queue = sortedInsert(queue, metric)
+				f.metrics[metricName] = sortedInsert(queue, metric)
 			}
 		} else {
 			f.metrics[metricName] = []*dto.Metric{metric}
