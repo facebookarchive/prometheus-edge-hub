@@ -87,6 +87,43 @@ func TestReceiveGRPC(t *testing.T) {
 	assert.Equal(t, 20, hub.stats.currentCountDatapoints)
 }
 
+func TestReceiveGRPCMultipleMetricsSameFamily(t *testing.T) {
+	var ts1 int64 = 10000000
+	var ts2 int64 = 20000000
+
+	hub := NewMetricHub(0, 10)
+	f1 := makeFamily(dto.MetricType_GAUGE, "fam1", 1, []*dto.LabelPair{}, 1)
+	f2 := makeFamily(dto.MetricType_GAUGE, "fam1", 1, []*dto.LabelPair{}, 1)
+
+	extraLabel := "extraLabel"
+	extraLabelVal := "value"
+	f3 := makeFamily(dto.MetricType_GAUGE, "fam1", 1, []*dto.LabelPair{{Name: &extraLabel, Value: &extraLabelVal}}, 1)
+	f4 := makeFamily(dto.MetricType_GAUGE, "fam1", 1, []*dto.LabelPair{{Name: &extraLabel, Value: &extraLabelVal}}, 1)
+
+	f1.GetMetric()[0].TimestampMs = &ts1
+	f2.GetMetric()[0].TimestampMs = &ts2
+	f3.GetMetric()[0].TimestampMs = &ts2
+	f4.GetMetric()[0].TimestampMs = &ts1
+
+	hub.ReceiveGRPC([]*dto.MetricFamily{f1, f2, f3, f4})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := echo.New().NewContext(req, rec)
+	err := hub.Scrape(ctx)
+	assert.NoError(t, err)
+
+	expectedText := `# HELP fam1 fam1
+# TYPE fam1 gauge
+fam1 0 10000000
+fam1 0 20000000
+fam1{extraLabel="value"} 0 10000000
+fam1{extraLabel="value"} 0 20000000
+`
+
+	assert.Equal(t, expectedText, rec.Body.String())
+}
+
 func TestReceiveGRPCOverLimit(t *testing.T) {
 	hub := NewMetricHub(1, 10)
 	f1 := makeFamily(dto.MetricType_GAUGE, "fam1", 10, []*dto.LabelPair{}, 1)
@@ -324,12 +361,6 @@ mf1 234 2
 mf1 456 3
 `
 	assert.Equal(t, expectedExpositionText, hub.exposeMetrics(hub.metricFamiliesByName, 5))
-}
-
-func getGaugeValue(gauge prometheus.Gauge) float64 {
-	var dtoMetric dto.Metric
-	_ = gauge.Write(&dtoMetric)
-	return *dtoMetric.Gauge.Value
 }
 
 func makeFamily(familyType dto.MetricType, familyName string, numMetrics int, labels []*dto.LabelPair, timestamp int64) *dto.MetricFamily {
