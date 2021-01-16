@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+import "third-party/metrics.proto";
+
+package grpc;
+option go_package = ".;grpc";
+
+message MetricFamilies {
+  repeated io.prometheus.client.MetricFamily families = 1;
+}
+
+message Void {}

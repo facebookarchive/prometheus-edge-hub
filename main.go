@@ -10,14 +10,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"google.golang.org/grpc"
-	"log"
-	"net"
-	"net/http"
+	"os"
 
-	hubgrpc "github.com/facebookincubator/prometheus-edge-hub/grpc"
-	"github.com/facebookincubator/prometheus-edge-hub/hub"
-	"github.com/labstack/echo"
+	"github.com/facebookincubator/prometheus-edge-hub/cmd"
 )
 
 const (
@@ -29,54 +24,48 @@ const (
 )
 
 func main() {
-	port := flag.Int("port", defaultPort, fmt.Sprintf("Port to listen for requests. Default is %d", defaultPort))
-	totalMetricsLimit := flag.Int("limit", defaultLimit, fmt.Sprintf("Limit the total metrics in the hub at one time. Will reject a push if hub is full. Default is %d which is no limit.", defaultLimit))
-	scrapeTimeout := flag.Int("scrapeTimeout", defaultScrapeTimeout, fmt.Sprintf("Timeout for scrape calls. Default is %d", defaultScrapeTimeout))
-	grpcPort := flag.Int("grpc-port", defaultGRPCPort, fmt.Sprintf("Port to listen for GRPC requests"))
-	grpcMaxGRPCMsgSizeBytes := flag.Int("grpc-max-msg-size", defaultMaxGRPCMsgSizeBytes, fmt.Sprintf("Max message size (bytes) for GRPC receives"))
 	flag.Parse()
+	// Subcommands
+	hubCommand := flag.NewFlagSet("hub", flag.PanicOnError)
+	distCommand := flag.NewFlagSet("distributor", flag.PanicOnError)
 
-	metricHub := hub.NewMetricHub(*totalMetricsLimit, *scrapeTimeout)
-	e := echo.New()
+	hubPort := hubCommand.Int("port", defaultPort, fmt.Sprintf("Port to listen for requests. Default is %d", defaultPort))
+	hubGrpcPort := hubCommand.Int("grpc-port", defaultGRPCPort, fmt.Sprintf("Port to listen for GRPC requests"))
+	hubMaxGRPCMsgSizeBytes := hubCommand.Int("grpc-max-msg-size", defaultMaxGRPCMsgSizeBytes, fmt.Sprintf("Max message size (bytes) for GRPC receives"))
+	totalMetricsLimit := hubCommand.Int("limit", defaultLimit, fmt.Sprintf("Limit the total metrics in the hub at one time. Will reject a push if hub is full. Default is %d which is no limit.", defaultLimit))
+	scrapeTimeout := hubCommand.Int("scrapeTimeout", defaultScrapeTimeout, fmt.Sprintf("Timeout for scrape calls. Default is %d", defaultScrapeTimeout))
 
-	e.POST("/metrics", metricHub.Receive)
-	e.GET("/metrics", metricHub.Scrape)
+	// distributor flags
+	distPort := distCommand.Int("port", defaultPort, fmt.Sprintf("Port to listen for requests. Default is %d", defaultPort))
+	distGrpcPort := distCommand.Int("grpc-port", defaultGRPCPort, fmt.Sprintf("Port to listen for GRPC requests"))
+	distMaxGRPCMsgSizeBytes := distCommand.Int("grpc-max-msg-size", defaultMaxGRPCMsgSizeBytes, fmt.Sprintf("Max message size (bytes) for GRPC receives"))
+	distributionKeyLabel := distCommand.String("key-label", "", "Label used to determine where to distribute metrics.")
+	var edgeHubArray hubArray
+	distCommand.Var(&edgeHubArray, "edge-hub", "Repeatable address of edge-hub to distribute metrics to.")
 
-	e.GET("/debug", metricHub.Debug)
-
-	// For liveness probe
-	e.GET("/", func(ctx echo.Context) error { return ctx.NoContent(http.StatusOK) })
-
-	e.GET("/internal", serveInternalMetrics)
-
-	if *grpcPort != 0 {
-		go func() {
-			log.Fatal(serveGRPC(*grpcPort, *grpcMaxGRPCMsgSizeBytes, metricHub))
-		}()
+	switch os.Args[1] {
+	case "hub":
+		hubCommand.Parse(os.Args[2:])
+		cmd.RunHub(*hubPort, *hubGrpcPort, *hubMaxGRPCMsgSizeBytes, *totalMetricsLimit, *scrapeTimeout)
+	case "distributor":
+		fmt.Printf("Parsed EdgeHub Array: %v\n", edgeHubArray)
+		distCommand.Parse(os.Args[2:])
+		cmd.RunDistributor(*distPort, *distGrpcPort, *distMaxGRPCMsgSizeBytes, *distributionKeyLabel, edgeHubArray)
+	default:
+		fmt.Println("usage: (hub|distributor) <flags>")
+		os.Exit(1)
 	}
-
-	go e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", *port)))
 }
 
-func serveInternalMetrics(ctx echo.Context) error {
-	text, err := hub.WriteInternalMetrics()
-	if err != nil {
-		return ctx.NoContent(http.StatusInternalServerError)
-	}
-	return ctx.String(http.StatusOK, text)
+type hubArray []string
+
+func (a *hubArray) String() string {
+	return "test"
 }
 
-func serveGRPC(port, maxMsgSize int, metricHub *hub.MetricHub) error {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-
-	metricsGrpcServer := hubgrpc.MetricsControllerServerImpl{MetricHub: metricHub}
-	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(maxMsgSize))
-	hubgrpc.RegisterMetricsControllerServer(grpcServer, &metricsGrpcServer)
-
-	log.Printf("Serving GRPC on: %d\n", port)
-
-	return grpcServer.Serve(lis)
+func (a *hubArray) Set(value string) error {
+	*a = append(*a, value)
+	return nil
 }
+
+

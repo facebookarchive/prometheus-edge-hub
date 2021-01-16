@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+import "common.proto";
+
+package grpc;
+option go_package = ".;grpc";
+
+service MetricsController {
+  rpc Collect (MetricFamilies) returns (Void) {}
+}
